@@ -112,9 +112,9 @@ update action model =
 
 drawCircle radius color alphaValue (positionX, positionY) =
   circle radius
-  |> (filled color) -- Must correspond to type
+  |> (filled color)
   |> move ((toFloat positionX), (toFloat positionY))
-  |> (alpha alphaValue) -- Must degrade over time
+  |> (alpha alphaValue)
 
 fade : Time.Time -> Time.Time -> Time.Time -> Float
 fade fadeOutIn currentT createdAt =
