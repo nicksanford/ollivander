@@ -10,21 +10,35 @@ import Time
 import Window
 import Random
 import Text
+import Array
 
 -- MODEL
 type alias WebEvent =
   { text: String
-  , color: Color          -- This is determined by the type
-  , position: (Int, Int)  -- These need to be created randomly within the window dimensions
-  --, createdAt: Time.Time       -- This is used to render the ripple effect and determine when the event dissapears
+  , eventType: EventType
+  , position: (Int, Int)
+  , createdAt: Time.Time
+  , updatedAt: Time.Time
   , count: Int
   }
 
 type alias Model =
   List WebEvent
 
-randomPoint : (Int, Int) -> Random.Generator (Int, Int)
-randomPoint (windowX, windowY) =
+type EventType = Positive | Negative | Neutral
+
+init : String -> EventType -> (Int, Int) -> Time.Time -> Time.Time -> Int -> WebEvent
+init text eventType position createdAt updatedAt count =
+  { text = text
+  , eventType = eventType
+  , position = position
+  , createdAt = createdAt
+  , updatedAt = updatedAt
+  , count = count
+  }
+
+randomPoint : Int -> Int -> Random.Generator (Int, Int)
+randomPoint windowX windowY =
   let
     minX = (-windowX // 2)
     maxX = (windowX // 2)
@@ -35,30 +49,47 @@ randomPoint (windowX, windowY) =
 
 initialModel : Model
 initialModel =
-  [ { text = "hey there hey there hey there hey there hey there hey there hey there hey there hey "
-    , color = red
-    , position = ( -200, 300)
-    , count = 0
-    }
-  , { text = "User nick@sanford.com signed up as an employer."
-    , color = green
-    , position = ( 200, -300)
-    , count = 0
-    }
-  ]
-
+  []
 
 -- UPDATE
 
-type Action = NoOp | Tick
+type Action = NoOp | Tick Time.Time | SlowTick Time.Time (Int, Int)
+
+eventTypeToColor : EventType -> Color
+eventTypeToColor eventType =
+  case eventType of
+    Positive ->
+      green
+    Negative ->
+      red
+    Neutral ->
+      gray
 
 update : Action -> Model -> Model
 update action model =
   case action of
     NoOp ->
       model
-    Tick ->
-      List.map (\webEvent -> { webEvent | count = webEvent.count + 1 }) model
+    Tick time ->
+      let
+        isFadedOut = (\webEvent -> (time - webEvent.createdAt) < fadeOutTime )
+        tickWebEvent = (\webEvent -> { webEvent | count = webEvent.count + 1, updatedAt = time })
+      in
+      List.filter isFadedOut model
+      |> List.map tickWebEvent 
+    SlowTick time (x, y) ->
+      let
+        maybeEventType = Array.get ((round time) % 3) (Array.fromList [Positive, Negative, Neutral])
+        position = Random.generate (randomPoint x y) (Random.initialSeed (round time)) |> fst
+        eventType = case maybeEventType of
+          Just t ->
+            t
+          _ ->
+            Neutral
+
+        newWebEvent = init "This is some text" eventType position time time 0
+      in
+         newWebEvent::model
 
 -- VIEW
 
@@ -69,9 +100,9 @@ drawCircle radius color alphaValue (positionX, positionY) =
   |> (alpha alphaValue) -- Must degrade over time
 
 fade : Time.Time -> Time.Time -> Time.Time -> Float
-fade fadeOutIn startT currentT =
+fade fadeOutIn currentT createdAt =
   let
-    timePassed = startT - currentT
+    timePassed = createdAt - currentT
     rawFade =  (timePassed + fadeOutIn) / fadeOutIn
   in
     if rawFade > 0 then rawFade else 0
@@ -79,7 +110,7 @@ fade fadeOutIn startT currentT =
 toFloatPosition : (Int, Int) -> (Float, Float)
 toFloatPosition (x, y) =
   (toFloat x, toFloat y)
-  
+
 textString : String -> (Int, Int) -> Float -> Form
 textString text (positionX, positionY) fade = Text.fromString(if fade > 0 then text else "")
   |> centered
@@ -88,46 +119,62 @@ textString text (positionX, positionY) fade = Text.fromString(if fade > 0 then t
   |> toForm
   |> move ((toFloat positionX), (toFloat(positionY - 80)))
 
-view : (Int, Int) -> Time.Time -> Model -> Time.Time -> Element
-view (w, h) startT webEvents currentT =
-  let
-    rippleFade = fade 2000 startT currentT
-    colorFade = fade 20000 startT currentT
+zip = List.map2 (,)
 
-    circles = List.map (\webEvent ->
-      [ drawCircle 140 gray rippleFade webEvent.position
-      , drawCircle 100 webEvent.color colorFade webEvent.position
-      , textString webEvent.text webEvent.position colorFade
+rippleTime = 2000
+fadeOutTime = 20000
+
+view : (Int, Int) -> Model -> Time.Time -> Element
+view (w, h) webEvents currentT =
+  let
+    rippleFade = fade (rippleTime) currentT
+    colorFade = fade (fadeOutTime) currentT
+
+    circles = List.map (\(webEvent) ->
+      [ drawCircle 140 gray (rippleFade webEvent.createdAt) webEvent.position
+      , drawCircle 100 (eventTypeToColor webEvent.eventType) (colorFade webEvent.createdAt) webEvent.position
+      , textString webEvent.text webEvent.position (colorFade webEvent.createdAt)
       ]) webEvents
       |> List.concatMap identity
   in
-    --above (collage w h circles) (show (List.map (\x -> (x.count, startT, cTime,  Time.inSeconds(cTime - startT), Time.inMilliseconds(cTime - startT))) webEvents))
-    above (collage w h circles) (show (startT, currentT,  Time.inSeconds(currentT - startT), Time.inMilliseconds(currentT - startT), rippleFade, colorFade))
+    above (collage w h circles) (show (currentT,  webEvents, (List.length webEvents)))
 
 -- SIGNAL
+delta : Signal Time.Time
+delta = (Time.fps 10)
+
+timeStream : Signal (Time.Time, Time.Time)
+timeStream = (Time.timestamp delta)
 
 ticker : Signal Action
 ticker =
-  Signal.map (always Tick) (Time.fps 60)
+  Signal.map (\(currentTime, _) -> Tick currentTime) timeStream
+
+slowTicker : Signal Action
+slowTicker =
+  let
+    slowTicksCurrentTime = (Signal.map SlowTick currentTime)
+    slowTicksCurrentTimeAndWindow = Signal.map2 (\slowTick dimensions -> slowTick dimensions) slowTicksCurrentTime Window.dimensions
+  in
+    Signal.sampleOn (Time.fps 0.5) slowTicksCurrentTimeAndWindow
 
 input : Signal Action
 input =
-  Signal.mergeMany [ticker]
+  Signal.mergeMany [ticker, slowTicker]
 
 model : Signal Model
 model =
   Signal.foldp update initialModel input
 
-startTime : Signal Time.Time
-startTime =
-  Signal.map fst (Signal.constant () |> Time.timestamp)
+initialSeed : Float -> Random.Seed
+initialSeed time = Random.initialSeed (round time)
 
 currentTime : Signal Time.Time
 currentTime =
-  Signal.map fst (Time.timestamp ticker)
+  Signal.map fst timeStream
 
 -- MAIN
 
 main : Signal Element
 main =
-  Signal.map4 view Window.dimensions startTime model currentTime
+  Signal.map3 view Window.dimensions model currentTime
