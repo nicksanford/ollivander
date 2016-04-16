@@ -12,7 +12,34 @@ import Random
 import Text
 import Array
 
+-- CONFIG
+
+rippleTime = 2000
+fadeOutTime = 20000
+
+-- MISC
+
+initialSeed : Float -> Random.Seed
+initialSeed time = Random.initialSeed (round time)
+
+randomPoint : Int -> Int -> Random.Generator (Int, Int)
+randomPoint windowX windowY =
+  let
+    minX = (-windowX // 2)
+    maxX = (windowX // 2)
+    minY = (-windowY // 2)
+    maxY = (windowX // 2)
+  in
+    Random.pair (Random.int minX maxX) (Random.int minY maxY)
+
+toFloatPosition : (Int, Int) -> (Float, Float)
+toFloatPosition (x, y) =
+  (toFloat x, toFloat y)
+
+zip = List.map2 (,)
+
 -- MODEL
+
 type alias WebEvent =
   { text: String
   , eventType: EventType
@@ -27,6 +54,16 @@ type alias Model =
 
 type EventType = Positive | Negative | Neutral
 
+eventTypeToColor : EventType -> Color
+eventTypeToColor eventType =
+  case eventType of
+    Positive ->
+      green
+    Negative ->
+      red
+    Neutral ->
+      gray
+
 init : String -> EventType -> (Int, Int) -> Time.Time -> Time.Time -> Int -> WebEvent
 init text eventType position createdAt updatedAt count =
   { text = text
@@ -37,16 +74,6 @@ init text eventType position createdAt updatedAt count =
   , count = count
   }
 
-randomPoint : Int -> Int -> Random.Generator (Int, Int)
-randomPoint windowX windowY =
-  let
-    minX = (-windowX // 2)
-    maxX = (windowX // 2)
-    minY = (-windowY // 2)
-    maxY = (windowX // 2)
-  in
-    Random.pair (Random.int minX maxX) (Random.int minY maxY)
-
 initialModel : Model
 initialModel =
   []
@@ -54,16 +81,6 @@ initialModel =
 -- UPDATE
 
 type Action = NoOp | Tick Time.Time | SlowTick Time.Time (Int, Int)
-
-eventTypeToColor : EventType -> Color
-eventTypeToColor eventType =
-  case eventType of
-    Positive ->
-      green
-    Negative ->
-      red
-    Neutral ->
-      gray
 
 update : Action -> Model -> Model
 update action model =
@@ -80,7 +97,7 @@ update action model =
     SlowTick time (x, y) ->
       let
         maybeEventType = Array.get ((round time) % 3) (Array.fromList [Positive, Negative, Neutral])
-        position = Random.generate (randomPoint x y) (Random.initialSeed (round time)) |> fst
+        position = Random.generate (randomPoint x y) (initialSeed time) |> fst
         eventType = case maybeEventType of
           Just t ->
             t
@@ -107,10 +124,6 @@ fade fadeOutIn currentT createdAt =
   in
     if rawFade > 0 then rawFade else 0
 
-toFloatPosition : (Int, Int) -> (Float, Float)
-toFloatPosition (x, y) =
-  (toFloat x, toFloat y)
-
 textString : String -> (Int, Int) -> Float -> Form
 textString text (positionX, positionY) fade = Text.fromString(if fade > 0 then text else "")
   |> centered
@@ -118,11 +131,6 @@ textString text (positionX, positionY) fade = Text.fromString(if fade > 0 then t
   |> opacity fade
   |> toForm
   |> move ((toFloat positionX), (toFloat(positionY - 80)))
-
-zip = List.map2 (,)
-
-rippleTime = 2000
-fadeOutTime = 20000
 
 view : (Int, Int) -> Model -> Time.Time -> Element
 view (w, h) webEvents currentT =
@@ -140,23 +148,13 @@ view (w, h) webEvents currentT =
     above (collage w h circles) (show (currentT,  webEvents, (List.length webEvents)))
 
 -- SIGNAL
+
+currentTime : Signal Time.Time
+currentTime =
+  Signal.map fst timeStream
+
 delta : Signal Time.Time
 delta = (Time.fps 10)
-
-timeStream : Signal (Time.Time, Time.Time)
-timeStream = (Time.timestamp delta)
-
-ticker : Signal Action
-ticker =
-  Signal.map (\(currentTime, _) -> Tick currentTime) timeStream
-
-slowTicker : Signal Action
-slowTicker =
-  let
-    slowTicksCurrentTime = (Signal.map SlowTick currentTime)
-    slowTicksCurrentTimeAndWindow = Signal.map2 (\slowTick dimensions -> slowTick dimensions) slowTicksCurrentTime Window.dimensions
-  in
-    Signal.sampleOn (Time.fps 0.5) slowTicksCurrentTimeAndWindow
 
 input : Signal Action
 input =
@@ -166,12 +164,20 @@ model : Signal Model
 model =
   Signal.foldp update initialModel input
 
-initialSeed : Float -> Random.Seed
-initialSeed time = Random.initialSeed (round time)
+slowTicker : Signal Action
+slowTicker =
+  let
+    slowTicksCurrentTime = (Signal.map SlowTick currentTime)
+    slowTicksCurrentTimeAndWindow = Signal.map2 (\slowTick dimensions -> slowTick dimensions) slowTicksCurrentTime Window.dimensions
+  in
+    Signal.sampleOn (Time.fps 0.5) slowTicksCurrentTimeAndWindow
 
-currentTime : Signal Time.Time
-currentTime =
-  Signal.map fst timeStream
+ticker : Signal Action
+ticker =
+  Signal.map (\(currentTime, _) -> Tick currentTime) timeStream
+
+timeStream : Signal (Time.Time, Time.Time)
+timeStream = (Time.timestamp delta)
 
 -- MAIN
 
