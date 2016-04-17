@@ -11,6 +11,8 @@ import Window
 import Random
 import Text
 import Array
+import Task exposing (Task)
+import Effects exposing (Effects)
 
 -- CONFIG
 
@@ -78,33 +80,57 @@ initialModel : Model
 initialModel =
   []
 
+type alias RawWebEvent =
+  { text: String
+  , eventType: String
+  }
+
 -- UPDATE
 
-type Action = NoOp | Tick Time.Time | SlowTick Time.Time (Int, Int)
+type Action = NoOp | Tick | SlowTick (Int, Int) | AddWebEvent RawWebEvent (Int, Int) | Increment
 
-update : Action -> Model -> Model
-update action model =
+update : (Time.Time, Action) -> Model -> Model
+update (timeNow, action) model =
   case action of
     NoOp ->
       model
-    Tick time ->
+    Increment ->
+      List.map (\webEvent -> { webEvent | count = webEvent.count + 100}) model
+    Tick ->
       let
-        isFadedOut = (\webEvent -> (time - webEvent.createdAt) < fadeOutTime )
-        tickWebEvent = (\webEvent -> { webEvent | count = webEvent.count + 1, updatedAt = time })
+        isFadedOut = (\webEvent -> (timeNow - webEvent.createdAt) < fadeOutTime )
+        tickWebEvent = (\webEvent -> { webEvent | updatedAt = timeNow })
       in
-      List.filter isFadedOut model
-      |> List.map tickWebEvent 
-    SlowTick time (x, y) ->
+        -- List.filter isFadedOut model |> List.map tickWebEvent
+        model
+    SlowTick (x, y) ->
       let
-        maybeEventType = Array.get ((round time) % 3) (Array.fromList [Positive, Negative, Neutral])
-        position = Random.generate (randomPoint x y) (initialSeed time) |> fst
+        position = Random.generate (randomPoint x y) (initialSeed timeNow) |> fst
+        maybeEventType = Array.get ((round timeNow) % 3) (Array.fromList [Positive, Negative, Neutral])
         eventType = case maybeEventType of
           Just t ->
             t
           _ ->
             Neutral
 
-        newWebEvent = init "This is some text" eventType position time time 0
+        newWebEvent = init "This is some text" eventType position timeNow timeNow 0
+      in
+         newWebEvent::model
+         --model
+    AddWebEvent rawWebEvent (x, y) ->
+      let
+        position = Random.generate (randomPoint x y) (initialSeed timeNow) |> fst
+        eventType = case rawWebEvent.eventType of
+          "positive" ->
+            Positive
+          "negative" ->
+            Negative
+          "neutral" ->
+            Neutral
+          _ ->
+            Neutral
+
+        newWebEvent = init rawWebEvent.text eventType position timeNow timeNow 0
       in
          newWebEvent::model
 
@@ -145,7 +171,8 @@ view (w, h) webEvents currentT =
       ]) webEvents
       |> List.concatMap identity
   in
-    above (collage w h circles) (show (currentT,  webEvents, (List.length webEvents)))
+--    above (collage w h circles) (show (currentT,  webEvents, (List.length webEvents), List.map (\w -> currentT - w.createdAt) webEvents))
+    (collage w h circles)
 
 -- SIGNAL
 
@@ -154,30 +181,53 @@ currentTime =
   Signal.map fst timeStream
 
 delta : Signal Time.Time
-delta = (Time.fps 10)
+delta = (Time.fps 20)
 
 input : Signal Action
 input =
-  Signal.mergeMany [ticker, slowTicker]
+  Signal.mergeMany [ticker, slowTicker, mappedJsActions]--, (Signal.map3 AddWebEvent webEvents currentTime Window.dimensions)]
 
 model : Signal Model
 model =
-  Signal.foldp update initialModel input
+  Signal.foldp update initialModel (Time.timestamp input)
 
 slowTicker : Signal Action
 slowTicker =
-  let
-    slowTicksCurrentTime = (Signal.map SlowTick currentTime)
-    slowTicksCurrentTimeAndWindow = Signal.map2 (\slowTick dimensions -> slowTick dimensions) slowTicksCurrentTime Window.dimensions
-  in
-    Signal.sampleOn (Time.fps 0.5) slowTicksCurrentTimeAndWindow
+  Signal.map SlowTick  Window.dimensions
+    |> Signal.sampleOn (Time.fps 0.5)
 
 ticker : Signal Action
 ticker =
-  Signal.map (\(currentTime, _) -> Tick currentTime) timeStream
+  Signal.map (always Tick) timeStream
 
 timeStream : Signal (Time.Time, Time.Time)
 timeStream = (Time.timestamp delta)
+
+-- PORTS
+
+--port webEvents : Signal RawWebEvent
+
+--port sound : Signal String
+--port sound =
+--  inbox.signal
+
+--inbox : Signal.Mailbox String
+--inbox =
+--  Signal.mailbox "none"
+
+--port runner : Task x ()
+--port runner =
+--  Signal.send inbox.address "sup yo?"
+
+port jsActions : Signal RawWebEvent
+
+mapJsActions : RawWebEvent -> (Int, Int) -> Action
+mapJsActions rawWebEvent position =
+  AddWebEvent rawWebEvent position
+
+mappedJsActions : Signal Action
+mappedJsActions =
+  Signal.map2 mapJsActions jsActions Window.dimensions
 
 -- MAIN
 

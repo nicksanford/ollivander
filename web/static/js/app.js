@@ -19,4 +19,6 @@ import "deps/phoenix_html/web/static/js/phoenix_html"
 // paths "./socket" or full ones "web/static/js/socket".
 
 // import socket from "./socket"
-Elm.fullscreen(Elm.App);
+let elmApp = Elm.fullscreen(Elm.App, {jsActions: {text: 'HEY THERE FRIEND!', eventType: 'positive'}});
+
+window.sendElm = elmApp.ports.jsActions.send
