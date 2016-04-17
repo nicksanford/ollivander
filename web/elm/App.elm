@@ -89,20 +89,20 @@ type alias RawWebEvent =
 
 type Action = NoOp | Tick | SlowTick (Int, Int) | AddWebEvent RawWebEvent (Int, Int) | Increment
 
-update : (Time.Time, Action) -> Model -> Model
+update : (Time.Time, Action) -> Model -> (Model, Effects Action)
 update (timeNow, action) model =
   case action of
     NoOp ->
-      model
+      (model, Effects.none)
     Increment ->
-      List.map (\webEvent -> { webEvent | count = webEvent.count + 100}) model
+      ((List.map (\webEvent -> { webEvent | count = webEvent.count + 100}) model), Effects.none)
     Tick ->
       let
         isFadedOut = (\webEvent -> (timeNow - webEvent.createdAt) < fadeOutTime )
         tickWebEvent = (\webEvent -> { webEvent | updatedAt = timeNow })
       in
         -- List.filter isFadedOut model |> List.map tickWebEvent
-        model
+        (model, Effects.none)
     SlowTick (x, y) ->
       let
         position = Random.generate (randomPoint x y) (initialSeed timeNow) |> fst
@@ -115,7 +115,7 @@ update (timeNow, action) model =
 
         newWebEvent = init "This is some text" eventType position timeNow timeNow 0
       in
-         newWebEvent::model
+         (newWebEvent::model, sendSound "some sound")
          --model
     AddWebEvent rawWebEvent (x, y) ->
       let
@@ -132,7 +132,7 @@ update (timeNow, action) model =
 
         newWebEvent = init rawWebEvent.text eventType position timeNow timeNow 0
       in
-         newWebEvent::model
+         (newWebEvent::model, sendSound "some sound")
 
 -- VIEW
 
@@ -158,8 +158,8 @@ textString text (positionX, positionY) fade = Text.fromString(if fade > 0 then t
   |> toForm
   |> move ((toFloat positionX), (toFloat(positionY - 80)))
 
-view : (Int, Int) -> Model -> Time.Time -> Element
-view (w, h) webEvents currentT =
+view : Signal.Address Action -> (Int, Int) -> Model -> Time.Time -> String -> Element
+view address (w, h) webEvents currentT s =
   let
     rippleFade = fade (rippleTime) currentT
     colorFade = fade (fadeOutTime) currentT
@@ -171,8 +171,8 @@ view (w, h) webEvents currentT =
       ]) webEvents
       |> List.concatMap identity
   in
---    above (collage w h circles) (show (currentT,  webEvents, (List.length webEvents), List.map (\w -> currentT - w.createdAt) webEvents))
-    (collage w h circles)
+    above (collage w h circles) (show (currentT,  webEvents, (List.length webEvents), s))
+--    (collage w h circles)
 
 -- SIGNAL
 
@@ -183,13 +183,47 @@ currentTime =
 delta : Signal Time.Time
 delta = (Time.fps 20)
 
-input : Signal Action
+input : List (Signal (Time.Time, Action))
 input =
-  Signal.mergeMany [ticker, slowTicker, mappedJsActions]--, (Signal.map3 AddWebEvent webEvents currentTime Window.dimensions)]
+  List.map Time.timestamp [ticker, slowTicker, mappedRawWebEvents]--, (Signal.map3 AddWebEvent webEvents currentTime Window.dimensions)]
 
-model : Signal Model
-model =
-  Signal.foldp update initialModel (Time.timestamp input)
+-- WIRE UP
+singleton action = [ action ]
+
+messages : Signal.Mailbox (List action)
+messages =
+  Signal.mailbox []
+
+address : Signal.Address action
+address =
+  Signal.forwardTo messages.address singleton
+
+updateStep : (Time.Time, Action) -> (Model, Effects Action) -> (Model, Effects Action)
+updateStep action (oldModel, accumulatedEffects) =
+  let
+    (newModel, additionalEffects) = update action oldModel
+  in
+    (newModel, Effects.batch [accumulatedEffects, additionalEffects])
+
+realUpdate : List (Time.Time ,Action) -> (Model, Effects Action) -> (Model, Effects Action)
+realUpdate actions (model, _) =
+  List.foldl updateStep (model, Effects.none) actions
+
+realInputs : Signal (List (Time.Time, Action))
+realInputs = Signal.mergeMany (messages.signal :: List.map (Signal.map singleton) input)
+
+effectsAndModel : Signal (Model, Effects Action)
+effectsAndModel =
+  Signal.foldp realUpdate (initialModel, Effects.none) (realInputs)
+
+realModel =
+  Signal.map fst effectsAndModel
+
+--
+
+--model : Signal Model
+--model =
+--  Signal.foldp update initialModel (input)
 
 slowTicker : Signal Action
 slowTicker =
@@ -205,32 +239,37 @@ timeStream = (Time.timestamp delta)
 
 -- PORTS
 
---port webEvents : Signal RawWebEvent
+port sound : Signal String
+port sound =
+  inbox.signal
 
---port sound : Signal String
---port sound =
---  inbox.signal
+sendSound : String  -> Effects Action
+sendSound sound =
+  Signal.send inbox.address sound
+    |> Effects.task
+    |> Effects.map (always NoOp)
 
---inbox : Signal.Mailbox String
---inbox =
---  Signal.mailbox "none"
+inbox : Signal.Mailbox String
+inbox =
+  Signal.mailbox "hey"
 
---port runner : Task x ()
---port runner =
---  Signal.send inbox.address "sup yo?"
+port rawWebEvent : Signal RawWebEvent
 
-port jsActions : Signal RawWebEvent
-
-mapJsActions : RawWebEvent -> (Int, Int) -> Action
-mapJsActions rawWebEvent position =
+mapRawWebEvents : RawWebEvent -> (Int, Int) -> Action
+mapRawWebEvents rawWebEvent position =
   AddWebEvent rawWebEvent position
 
-mappedJsActions : Signal Action
-mappedJsActions =
-  Signal.map2 mapJsActions jsActions Window.dimensions
+mappedRawWebEvents : Signal Action
+mappedRawWebEvents =
+  Signal.map2 mapRawWebEvents rawWebEvent Window.dimensions
+
+app =
+  { html = (Signal.map4 (view address) Window.dimensions realModel currentTime inbox.signal)
+  , tasks = (Signal.map (Effects.toTask messages.address << snd) effectsAndModel)
+  }
 
 -- MAIN
 
 main : Signal Element
 main =
-  Signal.map3 view Window.dimensions model currentTime
+  app.html
