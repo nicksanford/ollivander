@@ -10,7 +10,9 @@ import Random
 import Text
 import Array
 import Task exposing (Task)
+import StartApp
 import Effects exposing (Effects)
+import VirtualDom exposing (Node)
 
 
 -- CONFIG
@@ -56,10 +58,6 @@ toFloatPosition ( x, y ) =
   ( toFloat x, toFloat y )
 
 
-zip =
-  List.map2 (,)
-
-
 
 -- MODEL
 
@@ -75,7 +73,10 @@ type alias WebEvent =
 
 
 type alias Model =
-  List WebEvent
+  { webEvents : List WebEvent
+  , time : Time.Time
+  , dimensions : ( Int, Int )
+  }
 
 
 type EventType
@@ -98,19 +99,16 @@ eventTypeToColor eventType =
 
 
 init : String -> EventType -> ( Int, Int ) -> Time.Time -> Time.Time -> Int -> WebEvent
-init text eventType position createdAt updatedAt count =
-  { text = text
-  , eventType = eventType
-  , position = position
-  , createdAt = createdAt
-  , updatedAt = updatedAt
-  , count = count
-  }
+init =
+  WebEvent
 
 
 initialModel : Model
 initialModel =
-  []
+  { webEvents = []
+  , time = 0
+  , dimensions = ( 0, 0 )
+  }
 
 
 type alias RawWebEvent =
@@ -125,33 +123,43 @@ type alias RawWebEvent =
 
 type Action
   = NoOp
-  | Tick
-  | SlowTick ( Int, Int )
-  | AddWebEvent RawWebEvent ( Int, Int )
+  | Tick Time.Time
+  | SlowTick Time.Time ( Int, Int )
+  | AddWebEvent Time.Time RawWebEvent ( Int, Int )
   | Increment
 
 
-update : ( Time.Time, Action ) -> Model -> ( Model, Effects Action )
-update ( timeNow, action ) model =
+update : Action -> Model -> ( Model, Effects Action )
+update action model =
   case action of
     NoOp ->
       ( model, Effects.none )
 
     Increment ->
-      ( (List.map (\webEvent -> { webEvent | count = webEvent.count + 100 }) model), Effects.none )
+      let
+        newWebEvents =
+          List.map (\webEvent -> { webEvent | count = webEvent.count + 100 }) model.webEvents
+      in
+        ( { model | webEvents = newWebEvents }, Effects.none )
 
-    Tick ->
+    Tick timeNow ->
       let
         isFadedOut =
           (\webEvent -> (timeNow - webEvent.createdAt) < fadeOutTime)
 
         tickWebEvent =
           (\webEvent -> { webEvent | updatedAt = timeNow })
-      in
-        -- List.filter isFadedOut model |> List.map tickWebEvent
-        ( model, Effects.none )
 
-    SlowTick ( x, y ) ->
+        newWebEvents =
+          List.filter isFadedOut model.webEvents
+            |> List.map tickWebEvent
+
+        newModel =
+          { model | webEvents = newWebEvents, time = timeNow }
+      in
+        ( newModel, Effects.none )
+
+    SlowTick timeNow ( x, y ) ->
       let
         position =
           Random.generate (randomPoint x y) (initialSeed timeNow) |> fst
@@ -169,11 +177,14 @@ update ( timeNow, action ) model =
 
         newWebEvent =
           init "This is some text" eventType position timeNow timeNow 0
+
+        mewmodel =
+          { model | webEvents = newWebEvent :: model.webEvents, dimensions = ( x, y ), time = timeNow }
       in
-        ( newWebEvent :: model, sendSound "some sound" )
+        ( mewmodel, sendSound "some sound" )
 
     --model
-    AddWebEvent rawWebEvent ( x, y ) ->
+    AddWebEvent timeNow rawWebEvent ( x, y ) ->
       let
         position =
           Random.generate (randomPoint x y) (initialSeed timeNow) |> fst
@@ -194,8 +205,11 @@ update ( timeNow, action ) model =
 
         newWebEvent =
           init rawWebEvent.text eventType position timeNow timeNow 0
+
+        mewmodel =
+          { model | webEvents = newWebEvent :: model.webEvents, time = timeNow }
       in
-        ( newWebEvent :: model, sendSound "some sound" )
+        ( mewmodel, sendSound "some sound" )
 
 
 
@@ -239,14 +253,20 @@ textString text ( positionX, positionY ) fade =
     |> move ( (toFloat positionX), (toFloat (positionY - 80)) )
 
 
-view : Signal.Address Action -> ( Int, Int ) -> Model -> Time.Time -> String -> Element
-view address ( w, h ) webEvents currentT s =
+view : Signal.Address Action -> Model -> VirtualDom.Node
+view address model =
   let
     rippleFade =
-      fade (rippleTime) currentT
+      fade (rippleTime) model.time
 
     colorFade =
-      fade (fadeOutTime) currentT
+      fade (fadeOutTime) model.time
+
+    width =
+      fst model.dimensions
+
+    height =
+      snd model.dimensions
 
     circles =
       List.map
@@ -256,15 +276,13 @@ view address ( w, h ) webEvents currentT s =
           , textString webEvent.text webEvent.position (colorFade webEvent.createdAt)
           ]
         )
-        webEvents
+        model.webEvents
         |> List.concatMap identity
   in
-    above (collage w h circles) (show ( currentT, webEvents, (List.length webEvents), s ))
+    --    above (collage width height circles) (show ( model.time, model, (List.length model.webEvents) ))
+    --above (collage width height circles) (show ( model.time, model, (List.length model.webEvents) )) |> Html.fromElement
+    collage width height circles |> Html.fromElement
 
-
-
---    (collage w h circles)
--- SIGNAL
 
 
 currentTime : Signal Time.Time
@@ -274,77 +292,23 @@ currentTime =
 
 delta : Signal Time.Time
 delta =
-  (Time.fps 20)
+  (Time.fps 10)
 
 
-input : List (Signal ( Time.Time, Action ))
-input =
-  List.map Time.timestamp [ ticker, slowTicker, mappedRawWebEvents ]
-
-
-
---, (Signal.map3 AddWebEvent webEvents currentTime Window.dimensions)]
--- WIRE UP
-
-
-singleton action =
-  [ action ]
-
-
-messages : Signal.Mailbox (List action)
-messages =
-  Signal.mailbox []
-
-
-address : Signal.Address action
-address =
-  Signal.forwardTo messages.address singleton
-
-
-updateStep : ( Time.Time, Action ) -> ( Model, Effects Action ) -> ( Model, Effects Action )
-updateStep action ( oldModel, accumulatedEffects ) =
-  let
-    ( newModel, additionalEffects ) =
-      update action oldModel
-  in
-    ( newModel, Effects.batch [ accumulatedEffects, additionalEffects ] )
-
-
-realUpdate : List ( Time.Time, Action ) -> ( Model, Effects Action ) -> ( Model, Effects Action )
-realUpdate actions ( model, _ ) =
-  List.foldl updateStep ( model, Effects.none ) actions
-
-
-realInputs : Signal (List ( Time.Time, Action ))
-realInputs =
-  Signal.mergeMany (messages.signal :: List.map (Signal.map singleton) input)
-
-
-effectsAndModel : Signal ( Model, Effects Action )
-effectsAndModel =
-  Signal.foldp realUpdate ( initialModel, Effects.none ) (realInputs)
-
-
-realModel =
-  Signal.map fst effectsAndModel
-
-
-
---
---model : Signal Model
---model =
---  Signal.foldp update initialModel (input)
+inputs : List (Signal Action)
+inputs =
+  [ ticker, slowTicker, mappedRawWebEvents ]
 
 
 slowTicker : Signal Action
 slowTicker =
-  Signal.map SlowTick Window.dimensions
+  Signal.map2 SlowTick currentTime Window.dimensions
     |> Signal.sampleOn (Time.fps 0.5)
 
 
 ticker : Signal Action
 ticker =
-  Signal.map (always Tick) timeStream
+  Signal.map Tick currentTime
 
 
 timeStream : Signal ( Time.Time, Time.Time )
@@ -356,44 +320,52 @@ timeStream =
 -- PORTS
 
 
-port sound : Signal String
-port sound =
-  inbox.signal
+port tasks : Signal String
+port tasks =
+  outgoing.signal
 
 
 sendSound : String -> Effects Action
 sendSound sound =
-  Signal.send inbox.address sound
+  Signal.send outgoing.address sound
     |> Effects.task
     |> Effects.map (always NoOp)
 
 
-inbox : Signal.Mailbox String
-inbox =
-  Signal.mailbox "hey"
+outgointSignal : Signal String
+outgointSignal =
+  outgoing.signal
+
+
+outgoing : Signal.Mailbox String
+outgoing =
+  Signal.mailbox ""
 
 
 port rawWebEvent : Signal RawWebEvent
-mapRawWebEvents : RawWebEvent -> ( Int, Int ) -> Action
-mapRawWebEvents rawWebEvent position =
-  AddWebEvent rawWebEvent position
+mapRawWebEvents : Time.Time -> RawWebEvent -> ( Int, Int ) -> Action
+mapRawWebEvents time rawWebEvent position =
+  AddWebEvent time rawWebEvent position
 
 
 mappedRawWebEvents : Signal Action
 mappedRawWebEvents =
-  Signal.map2 mapRawWebEvents rawWebEvent Window.dimensions
-
-
-app =
-  { html = (Signal.map4 (view address) Window.dimensions realModel currentTime inbox.signal)
-  , tasks = (Signal.map (Effects.toTask messages.address << snd) effectsAndModel)
-  }
+  Signal.map3 mapRawWebEvents currentTime rawWebEvent Window.dimensions
 
 
 
 -- MAIN
 
 
-main : Signal Element
+app =
+  StartApp.start
+    { init = ( initialModel, Effects.none )
+    , update = update
+    , view = view
+    , inputs = inputs
+    }
+
+
+main : Signal Node
 main =
   app.html
