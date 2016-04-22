@@ -19,16 +19,79 @@ import Window
 -- CONFIG
 
 
-rippleTime =
-  2000
-
-
 fadeOutTime =
   20000
 
 
+rippleTime =
+  2000
+
+
+soundNames =
+  [ "another-one.mp3"
+  , "beatking_holdup.mp3"
+  , "claves.mp3"
+  , "conga2.mp3"
+  , "conga4.mp3"
+  , "cowbell.mp3"
+  , "crash2.mp3"
+  , "drake-ugh.mp3"
+  , "drake-yeauh.mp3"
+  , "guitar-palm-1.mp3"
+  , "guitar-palm-2.mp3"
+  , "guitar-palm-3.mp3"
+  , "guitar-palm-4.mp3"
+  , "guitar-palm-5.mp3"
+  , "gunshot3.mp3"
+  , "hat-1.mp3"
+  , "hat.mp3"
+  , "hay.mp3"
+  , "jersey-ha.mp3"
+  , "jyea.mp3"
+  , "keys1.mp3"
+  , "keys2.mp3"
+  , "keys3.mp3"
+  , "keys4.mp3"
+  , "keys5.mp3"
+  , "keys6.mp3"
+  , "metronome-up.mp3"
+  , "metronome.mp3"
+  , "normal3.mp3"
+  , "punchy-trap.mp3"
+  , "ross-huh.mp3"
+  , "ross-maybach.mp3"
+  , "smooth5.mp3"
+  , "snap.mp3"
+  , "snare-huge-reverb.mp3"
+  , "snare-rim-real.mp3"
+  , "stick.mp3"
+  , "tom.mp3"
+  , "tom2.mp3"
+  , "trap-snare-dry.mp3"
+  , "triangle.mp3"
+  , "ugh.mp3"
+  , "yeahbaby.mp3"
+  ]
+
+
 
 -- MISC
+
+
+soundName : Sound -> String
+soundName sound =
+  case sound of
+    Beep ->
+      "keys4.mp3"
+
+    Bop ->
+      "keys5.mp3"
+
+    Boop ->
+      "keys6.mp3"
+
+    None ->
+      ""
 
 
 initialSeed : Float -> Random.Seed
@@ -36,8 +99,8 @@ initialSeed time =
   Random.initialSeed (round time)
 
 
-randomPoint : Int -> Int -> Random.Generator ( Int, Int )
-randomPoint windowX windowY =
+randomPoint : ( Int, Int ) -> Random.Generator ( Int, Int )
+randomPoint ( windowX, windowY ) =
   let
     minX =
       (-windowX // 2)
@@ -79,6 +142,7 @@ type Sound
   = Beep
   | Bop
   | Boop
+  | None
 
 
 type EventType
@@ -97,7 +161,7 @@ eventTypeToColor eventType =
       red
 
     Neutral ->
-      gray
+      white
 
 
 eventTypeToSound : EventType -> Sound
@@ -110,7 +174,7 @@ eventTypeToSound eventType =
       Bop
 
     Neutral ->
-      Boop
+      None
 
 
 initialModel : Model
@@ -133,8 +197,7 @@ type alias RawWebEvent =
 
 type Action
   = NoOp
-  | Tick Time.Time
-  | SlowTick Time.Time ( Int, Int )
+  | Tick Time.Time ( Int, Int )
   | AddWebEvent Time.Time RawWebEvent ( Int, Int )
 
 
@@ -144,7 +207,7 @@ update action model =
     NoOp ->
       ( model, Effects.none )
 
-    Tick timeNow ->
+    Tick timeNow dimensions ->
       let
         isFadedOut =
           (\webEvent -> (timeNow - webEvent.createdAt) < fadeOutTime)
@@ -157,62 +220,41 @@ update action model =
             |> List.map tickWebEvent
 
         newModel =
-          { model | webEvents = newWebEvents, time = timeNow }
+          { model | webEvents = newWebEvents, time = timeNow, dimensions = dimensions }
       in
         ( newModel, Effects.none )
 
-    SlowTick timeNow ( x, y ) ->
+    AddWebEvent timeNow rawWebEvent dimensions ->
       let
         position =
-          Random.generate (randomPoint x y) (initialSeed timeNow) |> fst
+          Random.generate (randomPoint dimensions) (initialSeed timeNow) |> fst
 
         maybeEventType =
-          Array.get ((round timeNow) % 3) (Array.fromList [ Positive, Negative, Neutral ])
-
-        eventType =
-          (Maybe.withDefault Neutral maybeEventType)
-
-        newWebEvent =
-          WebEvent "This is some text" eventType position timeNow timeNow 0
-
-        mewmodel =
-          { model | webEvents = newWebEvent :: model.webEvents, dimensions = ( x, y ), time = timeNow }
-
-        sound =
-          eventType |> eventTypeToSound
-      in
-        ( mewmodel, sendSound sound )
-
-    --model
-    AddWebEvent timeNow rawWebEvent ( x, y ) ->
-      let
-        position =
-          Random.generate (randomPoint x y) (initialSeed timeNow) |> fst
-
-        eventType =
           case rawWebEvent.eventType of
             "positive" ->
-              Positive
+              Just Positive
 
             "negative" ->
-              Negative
-
-            "neutral" ->
-              Neutral
+              Just Negative
 
             _ ->
-              Neutral
+              Nothing
 
-        newWebEvent =
-          WebEvent rawWebEvent.text eventType position timeNow timeNow 0
+        returnTupple =
+          case maybeEventType of
+            Just eventType ->
+              ( { model
+                  | webEvents = ((WebEvent rawWebEvent.text eventType position timeNow timeNow 0) :: model.webEvents)
+                  , time = timeNow
+                  , dimensions = dimensions
+                }
+              , (sendSound (eventTypeToSound eventType))
+              )
 
-        sound =
-          eventType |> eventTypeToSound
-
-        mewmodel =
-          { model | webEvents = newWebEvent :: model.webEvents, time = timeNow }
+            Nothing ->
+              ( model, Effects.none )
       in
-        ( mewmodel, sendSound sound )
+        returnTupple
 
 
 
@@ -293,18 +335,12 @@ currentTime =
 
 inputs : List (Signal Action)
 inputs =
-  [ ticker, slowTicker, mappedRawWebEvents ]
-
-
-slowTicker : Signal Action
-slowTicker =
-  Signal.map2 SlowTick currentTime Window.dimensions
-    |> Signal.sampleOn (Time.fps 0.5)
+  [ ticker, mappedRawWebEvents ]
 
 
 ticker : Signal Action
 ticker =
-  Signal.map Tick currentTime
+  Signal.map2 Tick currentTime Window.dimensions
 
 
 timeStream : Signal ( Time.Time, Time.Time )
@@ -323,7 +359,7 @@ port tasks =
 
 sendSound : Sound -> Effects Action
 sendSound sound =
-  Signal.send soundMailbox.address (sound |> toString)
+  Signal.send soundMailbox.address (sound |> soundName)
     |> Effects.task
     |> Effects.map (always NoOp)
 
