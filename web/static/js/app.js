@@ -20,7 +20,7 @@ import "deps/phoenix_html/web/static/js/phoenix_html"
 
 // import socket from "./socket"
 let elmApp = Elm.fullscreen(Elm.App, {rawWebEvent: {text: 'HEY THERE FRIEND!', eventType: 'positive'}});
-elmApp.ports.tasks.subscribe(x => alert(x));
+elmApp.ports.sounds.subscribe(sound => console.log(sound));
 
 window.sendElm = elmApp.ports.rawWebEvent.send
 window.ports = elmApp.ports

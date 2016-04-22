@@ -1,18 +1,19 @@
 module App (..) where
 
-import Html
-import Graphics.Element exposing (..)
-import Graphics.Collage exposing (..)
-import Color exposing (..)
-import Time
-import Window
-import Random
-import Text
+import AnimationFrame
 import Array
-import Task exposing (Task)
-import StartApp
+import Color exposing (..)
 import Effects exposing (Effects)
+import Graphics.Collage exposing (..)
+import Graphics.Element exposing (..)
+import Html
+import Random
+import StartApp
+import Task exposing (Task)
+import Text
+import Time
 import VirtualDom exposing (Node)
+import Window
 
 
 -- CONFIG
@@ -53,11 +54,6 @@ randomPoint windowX windowY =
     Random.pair (Random.int minX maxX) (Random.int minY maxY)
 
 
-toFloatPosition : ( Int, Int ) -> ( Float, Float )
-toFloatPosition ( x, y ) =
-  ( toFloat x, toFloat y )
-
-
 
 -- MODEL
 
@@ -79,6 +75,12 @@ type alias Model =
   }
 
 
+type Sound
+  = Beep
+  | Bop
+  | Boop
+
+
 type EventType
   = Positive
   | Negative
@@ -98,9 +100,17 @@ eventTypeToColor eventType =
       gray
 
 
-init : String -> EventType -> ( Int, Int ) -> Time.Time -> Time.Time -> Int -> WebEvent
-init =
-  WebEvent
+eventTypeToSound : EventType -> Sound
+eventTypeToSound eventType =
+  case eventType of
+    Positive ->
+      Beep
+
+    Negative ->
+      Bop
+
+    Neutral ->
+      Boop
 
 
 initialModel : Model
@@ -126,7 +136,6 @@ type Action
   | Tick Time.Time
   | SlowTick Time.Time ( Int, Int )
   | AddWebEvent Time.Time RawWebEvent ( Int, Int )
-  | Increment
 
 
 update : Action -> Model -> ( Model, Effects Action )
@@ -134,13 +143,6 @@ update action model =
   case action of
     NoOp ->
       ( model, Effects.none )
-
-    Increment ->
-      let
-        newWebEvents =
-          List.map (\webEvent -> { webEvent | count = webEvent.count + 100 }) model.webEvents
-      in
-        ( { model | webEvents = newWebEvents }, Effects.none )
 
     Tick timeNow ->
       let
@@ -168,20 +170,18 @@ update action model =
           Array.get ((round timeNow) % 3) (Array.fromList [ Positive, Negative, Neutral ])
 
         eventType =
-          case maybeEventType of
-            Just t ->
-              t
-
-            _ ->
-              Neutral
+          (Maybe.withDefault Neutral maybeEventType)
 
         newWebEvent =
-          init "This is some text" eventType position timeNow timeNow 0
+          WebEvent "This is some text" eventType position timeNow timeNow 0
 
         mewmodel =
           { model | webEvents = newWebEvent :: model.webEvents, dimensions = ( x, y ), time = timeNow }
+
+        sound =
+          eventType |> eventTypeToSound
       in
-        ( mewmodel, sendSound "some sound" )
+        ( mewmodel, sendSound sound )
 
     --model
     AddWebEvent timeNow rawWebEvent ( x, y ) ->
@@ -204,18 +204,22 @@ update action model =
               Neutral
 
         newWebEvent =
-          init rawWebEvent.text eventType position timeNow timeNow 0
+          WebEvent rawWebEvent.text eventType position timeNow timeNow 0
+
+        sound =
+          eventType |> eventTypeToSound
 
         mewmodel =
           { model | webEvents = newWebEvent :: model.webEvents, time = timeNow }
       in
-        ( mewmodel, sendSound "some sound" )
+        ( mewmodel, sendSound sound )
 
 
 
 -- VIEW
 
 
+drawCircle : Float -> Color -> Float -> ( Int, Int ) -> Form
 drawCircle radius color alphaValue ( positionX, positionY ) =
   circle radius
     |> (filled color)
@@ -279,20 +283,12 @@ view address model =
         model.webEvents
         |> List.concatMap identity
   in
-    --    above (collage width height circles) (show ( model.time, model, (List.length model.webEvents) ))
-    --above (collage width height circles) (show ( model.time, model, (List.length model.webEvents) )) |> Html.fromElement
     collage width height circles |> Html.fromElement
-
 
 
 currentTime : Signal Time.Time
 currentTime =
   Signal.map fst timeStream
-
-
-delta : Signal Time.Time
-delta =
-  (Time.fps 10)
 
 
 inputs : List (Signal Action)
@@ -313,32 +309,32 @@ ticker =
 
 timeStream : Signal ( Time.Time, Time.Time )
 timeStream =
-  (Time.timestamp delta)
+  (Time.timestamp AnimationFrame.frame)
 
 
 
 -- PORTS
 
 
-port tasks : Signal String
+port tasks : Signal (Task.Task Effects.Never ())
 port tasks =
-  outgoing.signal
+  app.tasks
 
 
-sendSound : String -> Effects Action
+sendSound : Sound -> Effects Action
 sendSound sound =
-  Signal.send outgoing.address sound
+  Signal.send soundMailbox.address (sound |> toString)
     |> Effects.task
     |> Effects.map (always NoOp)
 
 
-outgointSignal : Signal String
-outgointSignal =
-  outgoing.signal
+port sounds : Signal String
+port sounds =
+  soundMailbox.signal
 
 
-outgoing : Signal.Mailbox String
-outgoing =
+soundMailbox : Signal.Mailbox String
+soundMailbox =
   Signal.mailbox ""
 
 
