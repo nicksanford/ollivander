@@ -5,8 +5,6 @@
 
 #### Elm
   * Display webhook text in realtime
-  * Display webhook text in visualization
-  * Play sound corresponding to Event Type
 
 #### Phoenix
   * Receive webhooks from external services

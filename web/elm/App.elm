@@ -299,7 +299,7 @@ textString text ( positionX, positionY ) fade =
     |> move ( (toFloat positionX), (toFloat (positionY - 80)) )
 
 
-view : Signal.Address Action -> Model -> VirtualDom.Node
+view : Signal.Address Action -> Model -> Node
 view address model =
   let
     rippleFade =
