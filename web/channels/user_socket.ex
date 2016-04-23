@@ -3,6 +3,7 @@ defmodule Ollivander.UserSocket do
 
   ## Channels
   # channel "rooms:*", Ollivander.RoomChannel
+  channel "web_events:*", Ollivander.WebEventChannel
 
   ## Transports
   transport :websocket, Phoenix.Transports.WebSocket

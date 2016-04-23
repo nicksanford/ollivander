@@ -16,5 +16,5 @@ channel.join()
   .receive("ok", resp => { console.log("Joined successfully", resp) })
   .receive("error", resp => { console.log("Unable to join", resp) })
 
-channel.on("ping", x => console.log(x))
+channel.on("ping", ({count}) => console.log("PING", count))
 channel.on("web_event", window.sendElm)

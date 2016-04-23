@@ -8,6 +8,10 @@ defmodule Ollivander.WebEventChannel do
       {:error, %{reason: "unauthorized"}}
     end
   end
+  #def join("web_events:" <> subtopic, payload, socket) do
+  #    :timer.send_interval(5_000, :ping)
+  #  {:ok, socket}
+  #end
 
   # Channels can be used in a request/response fashion
   # by sending replies to requests from the client
@@ -15,7 +19,7 @@ defmodule Ollivander.WebEventChannel do
     {:reply, {:ok, payload}, socket}
   end
 
-  def handle_info("ping", socket) do
+  def handle_info(:ping, socket) do
     count = socket.assigns[:count] || 1
     push socket, "ping", %{count: count}
     {:noreply, assign(socket, :count, count + 1)}
